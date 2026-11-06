@@ -1,0 +1,4 @@
+# A6 TSan 白名单：仅限 Seqlock 内部数据区域的非原子访问
+# 不扩大到调用方，且不覆盖其他并发原语
+race:aion::m1::l3::Seqlock::read
+race:aion::m1::l3::Seqlock::write

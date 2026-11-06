@@ -1,0 +1,7 @@
+build/
+artifacts/
+.tsan_logs/
+*.o
+*.a
+tests/tsan/test_tsan_race_race
+tests/tsan/test_tsan_race_clean
