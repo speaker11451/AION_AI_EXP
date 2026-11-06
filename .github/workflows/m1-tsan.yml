@@ -52,12 +52,11 @@ jobs:
       - name: Negative control A (fence removed, TSan MUST detect race in read())
         run: |
           cd build-tsan
-          # 整行删除 read() 里的两个 acquire fence（不残留 std::;）
+          # 整行删除 read() 里的两个 acquire fence（不用 s/// 替换避免残留 std::）
           sed -i '/atomic_thread_fence.*memory_order_acquire/d' ../include/aion/m1/l3/seqlock.hpp
           echo "=== seqlock.hpp fence 剩余 ==="
           grep -n "fence" ../include/aion/m1/l3/seqlock.hpp || echo "(no fence left)"
-          echo ""
-          echo "=== read() 函数体（sed 后） ==="
+          echo "=== read() after sed ==="
           sed -n '/bool read/,/^    }/p' ../include/aion/m1/l3/seqlock.hpp
 
           cmake --build . -j$(nproc)
@@ -74,9 +73,9 @@ jobs:
             exit 1
           fi
           if grep -q "ThreadSanitizer: data race" "$RUNNER_TEMP/nc_a.log"; then
-            echo "OK: Negative control A PASSED (race detected in read() after fence removal)"
+            echo "OK: Negative control A PASSED (race detected after fence removal)"
           else
-            echo "::error::Failed without data race - unexpected failure mode"
+            echo "::error::Failed without data race"
             head -n 30 "$RUNNER_TEMP/nc_a.log"
             exit 1
           fi
@@ -102,7 +101,7 @@ jobs:
             echo "OK: Whitelist does NOT over-suppress - A6 evidence complete"
             grep -B1 -A6 "ThreadSanitizer: data race" "$RUNNER_TEMP/nc_b.log" | head -n 15
           else
-            echo "::error::Failure without data race keyword"
+            echo "::error::Failure without data race"
             head -n 30 "$RUNNER_TEMP/nc_b.log"
             exit 1
           fi
