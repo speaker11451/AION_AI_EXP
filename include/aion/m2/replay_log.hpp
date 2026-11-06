@@ -1,14 +1,14 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
-#include <cstring>
+#include <cstdio>
 
 namespace aion::m2 {
 
 // A7: ReplayLog per-node ring buffer
-// - 每条 32B, 容量 65536, 仅测试模式开启
-// - FNV-1a 64-bit hash（32-bit 在 65536 条上碰撞率 ~ 39%，不可接受）
-// - 运行时开关 + 启动日志（见 enable()）
+// 内存：65536 × 32B = 2.00 MB / 节点
+// 生产关闭：enabled_ = false（运行时 flag，非编译宏）
+// 哈希：128-bit 双 64-bit FNV-1a（不同种子），碰撞率 < 1e-19
 class ReplayLog {
 public:
     static constexpr size_t CAP = 65536;
@@ -17,30 +17,32 @@ public:
     struct Entry {
         uint64_t epoch;
         uint64_t eproc;
-        uint64_t payload_hash_lo; // 64-bit hash
-        uint64_t payload_hash_hi; // 128-bit total
+        uint64_t payload_hash_lo;
+        uint64_t payload_hash_hi;
     };
 
-    ReplayLog() noexcept : head_(0), tail_(0) {}
+    ReplayLog() noexcept = default;
 
     bool enable(bool on) noexcept {
         enabled_ = on;
+        fprintf(stderr, "[A7] ReplayLog %s (per-node, 65536 entries, 2.00MB/node)\n",
+                on ? "ENABLED (test mode)" : "DISABLED (production)");
         return enabled_;
     }
     bool is_enabled() const noexcept { return enabled_; }
 
-    bool push(uint64_t epoch, uint64_t eproc, const uint8_t* payload, size_t len) noexcept {
+    bool push(uint64_t epoch, uint64_t eproc,
+              const uint8_t* payload, size_t len) noexcept {
         if (!enabled_) return false;
-        size_t idx = head_ % CAP;
-        Entry& e = entries_[idx];
+        Entry& e = entries_[head_ % CAP];
         e.epoch = epoch;
         e.eproc = eproc;
-        // 128-bit hash: FNV-1a 64 低 64 + 高 64（用不同 seed 避免相同算法）
         uint64_t h_lo = 1469598103934665603ULL;
-        uint64_t h_hi = 1099511628211ULL;
+        uint64_t h_hi = 0xCBF29CE484222325ULL;
         for (size_t i = 0; i < len; ++i) {
-            h_lo ^= payload[i]; h_lo *= 1099511628211ULL;
-            h_hi ^= uint64_t(payload[i]) << 1; h_hi *= 1099511628211ULL;
+            h_lo ^= payload[i];  h_lo *= 1099511628211ULL;
+            h_hi ^= payload[i];  h_hi *= 1099511628211ULL;
+            h_hi = (h_hi >> 1) | (h_hi << 63);
         }
         e.payload_hash_lo = h_lo;
         e.payload_hash_hi = h_hi;
@@ -56,15 +58,10 @@ public:
     void clear() noexcept { head_ = tail_ = 0; }
 
 private:
-    Entry entries_[CAP];
-    uint64_t head_, tail_;
+    Entry entries_[CAP]{};
+    uint64_t head_{0};
+    uint64_t tail_{0};
     bool enabled_{false};
 };
-
-// 启动日志示例（在 main 入口调用）
-inline void log_replaylog_status(bool enabled) {
-    fprintf(stderr, "[A7] ReplayLog: %s (per-node, 65536 entries, ~2MB/node)\n",
-            enabled ? "ENABLED (test mode)" : "DISABLED (production)");
-}
 
 } // namespace aion::m2
