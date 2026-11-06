@@ -36,8 +36,8 @@ jobs:
       - name: Platform contract (128-bit lock-free)
         run: |
           cd build-tsan
-          ./tests/unit_compact_snapshot 2>&1 | tee /tmp/platform.log
-          if grep -q "= FALSE" /tmp/platform.log; then
+          ./tests/unit_compact_snapshot 2>&1 | tee "$RUNNER_TEMP/platform.log"
+          if grep -q "= FALSE" "$RUNNER_TEMP/platform.log"; then
             echo "::error::__atomic_always_lock_free(16) is FALSE on x86_64 CI"
             exit 1
           fi
@@ -47,62 +47,62 @@ jobs:
         run: |
           cd build-tsan
           export TSAN_OPTIONS="suppressions=$(cd .. && pwd)/tsan.supp halt_on_error=1 print_suppressions=1"
-          # 排除：
-          # - g2_million_tick: TSan 30x 开销，跑 5 分钟以上（超时）
-          # - g1_compile_fail: 编译期检查，非运行时
-          # - test_seqlock_consistency: 故意用 raw_data() 制造竞态，用于 Negative control B
           ctest --output-on-failure -E "g2_million_tick|g1_compile_fail|test_seqlock_consistency"
 
       - name: Negative control A (fence removed, TSan MUST detect race in read())
         run: |
           cd build-tsan
-          sed -i 's/atomic_thread_fence.*memory_order_acquire.*;//' ../include/aion/m1/l3/seqlock.hpp
+          # 整行删除 read() 里的两个 acquire fence（不残留 std::;）
+          sed -i '/atomic_thread_fence.*memory_order_acquire/d' ../include/aion/m1/l3/seqlock.hpp
           echo "=== seqlock.hpp fence 剩余 ==="
           grep -n "fence" ../include/aion/m1/l3/seqlock.hpp || echo "(no fence left)"
+          echo ""
+          echo "=== read() 函数体（sed 后） ==="
+          sed -n '/bool read/,/^    }/p' ../include/aion/m1/l3/seqlock.hpp
+
           cmake --build . -j$(nproc)
 
           export TSAN_OPTIONS="suppressions=/dev/null halt_on_error=1"
           set +e
-          ctest -R "^unit_seqlock$" --output-on-failure > /tmp/nc_a.log 2>&1
+          ctest -R "^unit_seqlock$" --output-on-failure > "$RUNNER_TEMP/nc_a.log" 2>&1
           RC=$?
           set -e
           echo "ctest exit = $RC"
+          cat "$RUNNER_TEMP/nc_a.log"
           if [ $RC -eq 0 ]; then
             echo "::error::Negative control A FAILED: no race detected after fence removal"
             exit 1
           fi
-          if grep -q "ThreadSanitizer: data race" /tmp/nc_a.log; then
+          if grep -q "ThreadSanitizer: data race" "$RUNNER_TEMP/nc_a.log"; then
             echo "OK: Negative control A PASSED (race detected in read() after fence removal)"
           else
             echo "::error::Failed without data race - unexpected failure mode"
-            head -n 30 /tmp/nc_a.log
+            head -n 30 "$RUNNER_TEMP/nc_a.log"
             exit 1
           fi
 
       - name: Negative control B (raw_data() race must NOT be suppressed)
         run: |
           cd build-tsan
-          # 恢复 fence 改动前状态（从 git checkout 拿回原文件）
           git checkout -- ../include/aion/m1/l3/seqlock.hpp
           cmake --build . -j$(nproc)
 
           export TSAN_OPTIONS="suppressions=$(cd .. && pwd)/tsan.supp halt_on_error=1 print_suppressions=1"
           set +e
-          ./tests/test_seqlock_consistency > /tmp/nc_b.log 2>&1
+          ./tests/test_seqlock_consistency > "$RUNNER_TEMP/nc_b.log" 2>&1
           RC=$?
           set -e
           echo "exit code = $RC"
           if [ $RC -eq 0 ]; then
             echo "::error::Whitelist OVER-SUPPRESSING: raw_data() race not detected"
-            echo "::error::A6 evidence invalid - whitelist too broad"
             exit 1
           fi
-          if grep -q "ThreadSanitizer: data race" /tmp/nc_b.log; then
+          if grep -q "ThreadSanitizer: data race" "$RUNNER_TEMP/nc_b.log"; then
             echo "OK: Negative control B PASSED (raw_data() race still detected)"
             echo "OK: Whitelist does NOT over-suppress - A6 evidence complete"
-            grep -B1 -A6 "ThreadSanitizer: data race" /tmp/nc_b.log | head -n 15
+            grep -B1 -A6 "ThreadSanitizer: data race" "$RUNNER_TEMP/nc_b.log" | head -n 15
           else
             echo "::error::Failure without data race keyword"
-            head -n 30 /tmp/nc_b.log
+            head -n 30 "$RUNNER_TEMP/nc_b.log"
             exit 1
           fi
