@@ -1,4 +1,8 @@
-# A6 TSan 白名单：仅限 Seqlock 内部数据区域的非原子访问
-# 不扩大到调用方，且不覆盖其他并发原语
-race:aion::m1::l3::Seqlock::read
-race:aion::m1::l3::Seqlock::write
+# Seqlock 的 s1==s2 double-check 模式 TSan 无法建模（data_ 访问在 acquire fence 之后
+# 才被 s2==s1 验证），因此对 read()/write() 内部的 data_ 访问使用白名单。
+# 模板实例 Seqlock<Payload>::read 中 <Payload> 会截断字面量 pattern，必须用通配符。
+# 注意：不能扩大到 *Seqlock*，否则 raw_data() 的调用方访问也会被误抑制。
+race:*Seqlock*4read*
+race:*Seqlock*5write*
+race:*Seqlock*read(*
+race:*Seqlock*write(*

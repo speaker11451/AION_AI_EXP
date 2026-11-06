@@ -21,8 +21,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq cmake clang
           clang++ --version
-          uname -a
-          grep -o 'cx16' /proc/cpuinfo | head -n1 || echo "cx16 not found"
 
       - name: Configure (TSan + mcx16)
         run: |
@@ -45,42 +43,66 @@ jobs:
           fi
           echo "OK: 128-bit atomic is lock-free on x86_64"
 
-      - name: Positive test (with whitelist, race-free)
+      - name: Positive test (whitelist applied, no unexpected races)
         run: |
           cd build-tsan
           export TSAN_OPTIONS="suppressions=$(cd .. && pwd)/tsan.supp halt_on_error=1 print_suppressions=1"
-          ctest --output-on-failure -E "g2_million_tick|g1_compile_fail"
+          # 排除：
+          # - g2_million_tick: TSan 30x 开销，跑 5 分钟以上（超时）
+          # - g1_compile_fail: 编译期检查，非运行时
+          # - test_seqlock_consistency: 故意用 raw_data() 制造竞态，用于 Negative control B
+          ctest --output-on-failure -E "g2_million_tick|g1_compile_fail|test_seqlock_consistency"
 
-      - name: Negative control (fence removed, TSan MUST detect race)
+      - name: Negative control A (fence removed, TSan MUST detect race in read())
         run: |
           cd build-tsan
-          # 去掉 read() 里两个 acquire fence（保留 write() 的 release fence）
           sed -i 's/atomic_thread_fence.*memory_order_acquire.*;//' ../include/aion/m1/l3/seqlock.hpp
           echo "=== seqlock.hpp fence 剩余 ==="
           grep -n "fence" ../include/aion/m1/l3/seqlock.hpp || echo "(no fence left)"
           cmake --build . -j$(nproc)
 
-          # 关键：不用白名单（suppressions=/dev/null），删 fence 后 TSan 必须报 race
           export TSAN_OPTIONS="suppressions=/dev/null halt_on_error=1"
-
           set +e
-          ctest -R unit_seqlock --output-on-failure 2>&1 | tee /tmp/negative_control.log
-          RC=${PIPESTATUS[0]}
+          ctest -R "^unit_seqlock$" --output-on-failure > /tmp/nc_a.log 2>&1
+          RC=$?
           set -e
-          echo "ctest exit code = $RC"
-
+          echo "ctest exit = $RC"
           if [ $RC -eq 0 ]; then
-            echo "::error::Negative control FAILED: ctest passed despite fence removal"
-            echo "::error::TSan did not detect the real data race -> whitelist over-suppressing"
+            echo "::error::Negative control A FAILED: no race detected after fence removal"
+            exit 1
+          fi
+          if grep -q "ThreadSanitizer: data race" /tmp/nc_a.log; then
+            echo "OK: Negative control A PASSED (race detected in read() after fence removal)"
+          else
+            echo "::error::Failed without data race - unexpected failure mode"
+            head -n 30 /tmp/nc_a.log
             exit 1
           fi
 
-          if grep -q "ThreadSanitizer: data race" /tmp/negative_control.log; then
-            echo "OK: Negative control PASSED: TSan detected data race after fence removal"
-            echo "OK: Whitelist is NOT over-suppressing (A6 evidence complete)"
-            grep -B2 -A8 "ThreadSanitizer: data race" /tmp/negative_control.log | head -n 30
+      - name: Negative control B (raw_data() race must NOT be suppressed)
+        run: |
+          cd build-tsan
+          # 恢复 fence 改动前状态（从 git checkout 拿回原文件）
+          git checkout -- ../include/aion/m1/l3/seqlock.hpp
+          cmake --build . -j$(nproc)
+
+          export TSAN_OPTIONS="suppressions=$(cd .. && pwd)/tsan.supp halt_on_error=1 print_suppressions=1"
+          set +e
+          ./tests/test_seqlock_consistency > /tmp/nc_b.log 2>&1
+          RC=$?
+          set -e
+          echo "exit code = $RC"
+          if [ $RC -eq 0 ]; then
+            echo "::error::Whitelist OVER-SUPPRESSING: raw_data() race not detected"
+            echo "::error::A6 evidence invalid - whitelist too broad"
+            exit 1
+          fi
+          if grep -q "ThreadSanitizer: data race" /tmp/nc_b.log; then
+            echo "OK: Negative control B PASSED (raw_data() race still detected)"
+            echo "OK: Whitelist does NOT over-suppress - A6 evidence complete"
+            grep -B1 -A6 "ThreadSanitizer: data race" /tmp/nc_b.log | head -n 15
           else
-            echo "::error::Negative control FAILED: ctest failed but no 'data race' in log"
-            head -n 30 /tmp/negative_control.log
+            echo "::error::Failure without data race keyword"
+            head -n 30 /tmp/nc_b.log
             exit 1
           fi
