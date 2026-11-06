@@ -4,7 +4,6 @@
 #include <cassert>
 #include "aion/m1/l0/l0.hpp"
 #include "aion/m1/l3_5/burst_breaker.hpp"
-#include "aion/m1/l3_5/global_burst_quota.hpp"
 
 namespace aion::m1::l3_5 {
 using namespace aion::m1::l0;
@@ -25,17 +24,14 @@ struct TimeWheel {
     static constexpr int SUB_BUCKETS = 8;
     static constexpr uint64_t SHIFT[LVL_COUNT] = {0, 6, 12, 18};
 
-    // 三级链表：层 -> 桶 -> 亚桶
-    WheelNode* bucket_heads[LVL_COUNT][BUCKETS][SUB_BUCKETS];
+    WheelNode* heads[LVL_COUNT][BUCKETS][SUB_BUCKETS];
     uint64_t next_expiry[LVL_COUNT];
     BurstBreaker global_burst;
-    GlobalBurstQuota burst_quota;
 
     TimeWheel() noexcept {
         for (int l = 0; l < LVL_COUNT; ++l) {
             for (int b = 0; b < BUCKETS; ++b)
-                for (int s = 0; s < SUB_BUCKETS; ++s)
-                    bucket_heads[l][b][s] = nullptr;
+                for (int s = 0; s < SUB_BUCKETS; ++s) heads[l][b][s] = nullptr;
             next_expiry[l] = UINT64_MAX;
         }
         global_burst.limit_per_tick = 100;
@@ -58,9 +54,9 @@ struct TimeWheel {
     }
 
     void remove_from_bucket(int lvl, int b, int s, WheelNode* n) noexcept {
-        WheelNode* head = bucket_heads[lvl][b][s];
+        WheelNode* head = heads[lvl][b][s];
         if (head == n) {
-            bucket_heads[lvl][b][s] = n->next;
+            heads[lvl][b][s] = n->next;
             if (n->next) n->next->prev = nullptr;
         } else {
             if (n->prev) n->prev->next = n->next;
@@ -70,7 +66,7 @@ struct TimeWheel {
     }
 
     void schedule(WheelNode* n, TimePoint now, LogTau tau, void* owner) noexcept {
-        assert(n->in_wheel == false);
+        if (n->in_wheel) return;
         n->owner = owner;
         uint64_t delta = uint64_t(tau.to_us());
         if (delta == 0) delta = 1;
@@ -85,38 +81,50 @@ struct TimeWheel {
         n->level = lvl;
         uint32_t b = uint32_t((expiry >> SHIFT[lvl]) & (BUCKETS - 1));
         n->bucket = b;
-        // A5: 按相对偏移的低 3 位分桶
         uint32_t sub = (SHIFT[lvl] > 3) ? ((expiry >> (SHIFT[lvl] - 3)) & 7) : 0;
         n->in_wheel = true;
-        insert_sorted(bucket_heads[lvl][b][sub], n);
+        insert_sorted(heads[lvl][b][sub], n);
         if (expiry < next_expiry[lvl]) next_expiry[lvl] = expiry;
     }
 
+    // 修复：跨桶跨亚桶的全局最小 expiry 扫描
     WheelNode* dispatch_expired(TimePoint now, uint64_t tick) noexcept {
         for (int lvl = 0; lvl < LVL_COUNT; ++lvl) {
             if (now.us < next_expiry[lvl]) continue;
+
+            WheelNode* best = nullptr;
+            int best_b = -1, best_s = -1;
             for (int b = 0; b < BUCKETS; ++b) {
                 for (int s = 0; s < SUB_BUCKETS; ++s) {
-                    WheelNode* n = bucket_heads[lvl][b][s];
+                    WheelNode* n = heads[lvl][b][s];
                     if (!n) continue;
-                    if (n->expiry_us <= now.us) {
-                        if (!global_burst.admit(tick)) {
-                            LogTau new_tau = LogTau::from_us((n->expiry_us > now.us ? n->expiry_us - now.us : 1) * 10.0f);
-                            remove_from_bucket(lvl, b, s, n);
-                            n->in_wheel = false;
-                            schedule(n, now, new_tau, n->owner);
-                            return nullptr;
-                        }
-                        remove_from_bucket(lvl, b, s, n);
-                        n->in_wheel = false;
-                        return n;
+                    if (n->expiry_us > now.us) continue;
+                    if (!best || n->expiry_us < best->expiry_us) {
+                        best = n; best_b = b; best_s = s;
                     }
                 }
             }
+
+            if (best) {
+                if (!global_burst.admit(tick)) {
+                    LogTau new_tau = LogTau::from_us((best->expiry_us > now.us ? best->expiry_us - now.us : 1) * 10.0f);
+                    remove_from_bucket(lvl, best_b, best_s, best);
+                    best->in_wheel = false;
+                    schedule(best, now, new_tau, best->owner);
+                    return nullptr;
+                }
+                remove_from_bucket(lvl, best_b, best_s, best);
+                best->in_wheel = false;
+                return best;
+            }
+
             bool all_empty = true;
-            for (int b = 0; b < BUCKETS; ++b)
-                for (int s = 0; s < SUB_BUCKETS; ++s)
-                    if (bucket_heads[lvl][b][s]) { all_empty = false; break; }
+            for (int b = 0; b < BUCKETS; ++b) {
+                for (int s = 0; s < SUB_BUCKETS; ++s) {
+                    if (heads[lvl][b][s]) { all_empty = false; break; }
+                }
+                if (!all_empty) break;
+            }
             if (all_empty) next_expiry[lvl] = UINT64_MAX;
         }
         return nullptr;

@@ -1,8 +1,11 @@
 find_package(Threads REQUIRED)
 
+# 关键：所有测试必须保留 assert 语义，否则 Release 下 -DNDEBUG 会让 assert 变成空操作
+# 生产库（aion_m1 INTERFACE）不受影响，仍走默认 Release 行为
 function(add_aion_test target src)
     add_executable(${target} ${src})
     target_link_libraries(${target} PRIVATE aion_m1 Threads::Threads)
+    target_compile_options(${target} PRIVATE -UNDEBUG)
     add_test(NAME ${target} COMMAND ${target})
     set_tests_properties(${target} PROPERTIES TIMEOUT 15)
 endfunction()
@@ -20,6 +23,9 @@ add_aion_test(g2_timewheel      stress/g2_timewheel.cpp)
 add_aion_test(test_store_compact_torn_write atomic/test_store_compact_torn_write.cpp)
 add_aion_test(test_burst_quota_fairness stress/test_burst_quota_fairness.cpp)
 add_aion_test(test_wheel_overflow_ordering stress/test_wheel_overflow_ordering.cpp)
+add_aion_test(test_seqlock_consistency contract/test_seqlock_consistency.cpp)
+target_compile_definitions(test_seqlock_consistency PRIVATE AION_TEST_ACCESS)
+
 
 # G1 compile-fail 矩阵
 add_test(NAME g1_compile_fail
@@ -28,10 +34,3 @@ add_test(NAME g1_compile_fail
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -P ${CMAKE_SOURCE_DIR}/tests/contract/check_compile_fail.cmake)
 set_tests_properties(g1_compile_fail PROPERTIES TIMEOUT 10)
-
-# A4/A6 等验收测试需要 assert 生效，去掉 NDEBUG
-foreach(t test_burst_quota_fairness test_store_compact_torn_write test_seqlock_consistency)
-    if(TARGET ${t})
-        target_compile_options(${t} PRIVATE -UNDEBUG)
-    endif()
-endforeach()

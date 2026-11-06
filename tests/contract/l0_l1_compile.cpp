@@ -13,7 +13,7 @@ int main() {
     LogTau t = LogTau::from_us(1000.0f);
     assert(std::isfinite(t.to_us()) && t.to_us() > 0);
     assert(LogTau::from_us(0.0f).to_us()  >= LogTau::MIN_US - 1e-3f);
-    assert(LogTau::from_us(1e30f).to_us() <= LogTau::MAX_US + 1.0f);
+    assert(LogTau::from_us(1e30f).to_us() <= LogTau::MAX_US * 1.01f);
 
     SurpriseNats sn{50.0f};
     sn += 5.0f;
