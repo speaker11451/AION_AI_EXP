@@ -6,6 +6,7 @@ function(add_aion_test target src)
     add_executable(${target} ${src})
     target_link_libraries(${target} PRIVATE aion_m1 Threads::Threads)
     target_compile_options(${target} PRIVATE -UNDEBUG)
+    target_compile_definitions(${target} PRIVATE AION_ARTIFACTS_ROOT="${CMAKE_SOURCE_DIR}/artifacts")
     add_test(NAME ${target} COMMAND ${target})
     set_tests_properties(${target} PROPERTIES TIMEOUT 15)
 endfunction()
@@ -34,3 +35,4 @@ add_test(NAME g1_compile_fail
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -P ${CMAKE_SOURCE_DIR}/tests/contract/check_compile_fail.cmake)
 set_tests_properties(g1_compile_fail PROPERTIES TIMEOUT 10)
+add_aion_test(g2_million_tick stress/g2_million_tick.cpp)

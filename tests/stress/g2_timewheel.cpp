@@ -1,4 +1,5 @@
 #include "aion/m1/m1_core.hpp"
+#include "../test_paths.hpp"
 #include <cstdio>
 #include <vector>
 #include <random>
@@ -21,8 +22,8 @@ int main() {
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> tau_long(16000000.0f, 30000000.0f);
 
-    FILE* f_stats = fopen("../../artifacts/M1/stress/g2_stats.csv", "w");
-    FILE* f_timeline = fopen("../../artifacts/M1/stress/g2_timeline.csv", "w");
+    FILE* f_stats = open_artifact("M1/stress/g2_stats.csv", "w");
+    FILE* f_timeline = open_artifact("M1/stress/g2_timeline.csv", "w");
     fprintf(f_stats, "tick_us,total_dispatched,burst_throttled\n");
     fprintf(f_timeline, "tick_us,node_id,tau_us,expiry_us\n");
 
@@ -33,6 +34,7 @@ int main() {
     TimePoint now{0};
     for (auto& n : nodes) core.schedule(&n, now);
 
+    if (!f_stats || !f_timeline) { fprintf(stderr, "fopen failed\n"); return 1; }
     uint64_t total_disp = 0;
     for (uint64_t tick = 1; tick <= 1000; ++tick) {
         now.us += 1000;
