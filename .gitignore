@@ -1,7 +1,14 @@
 build/
-artifacts/
+artifacts/*
+!artifacts/M1/
+artifacts/M1/*
+!artifacts/M1/gate/
+artifacts/M1/gate/*
+!artifacts/M1/gate/*.md
 .tsan_logs/
 *.o
 *.a
 tests/tsan/test_tsan_race_race
 tests/tsan/test_tsan_race_clean
+tests/test_replay_log
+tests/test_seqlock_consistency
