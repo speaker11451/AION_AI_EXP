@@ -28,3 +28,10 @@ add_test(NAME g1_compile_fail
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -P ${CMAKE_SOURCE_DIR}/tests/contract/check_compile_fail.cmake)
 set_tests_properties(g1_compile_fail PROPERTIES TIMEOUT 10)
+
+# A4/A6 等验收测试需要 assert 生效，去掉 NDEBUG
+foreach(t test_burst_quota_fairness test_store_compact_torn_write test_seqlock_consistency)
+    if(TARGET ${t})
+        target_compile_options(${t} PRIVATE -UNDEBUG)
+    endif()
+endforeach()
