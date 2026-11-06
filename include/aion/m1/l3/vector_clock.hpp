@@ -18,7 +18,7 @@ struct VectorClockT {
                 return from_epoch < slots[i].epoch ? 1 : -1;
             }
         }
-        if (from_epoch < summary_min) return 1; // covered by summary
+        if (from_epoch < summary_min) return 2; // unknown, conservative concurrent (D1 fix)
         return 2; // unknown, conservative concurrent
     }
 
